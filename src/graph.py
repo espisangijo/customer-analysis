@@ -54,7 +54,7 @@ class GraphBuilder:
         ]
         return " ".join(customer_dialogue)
 
-    def _parse_emotion_string(self, s):
+    def _parse_comma_separated_string(self, s):
         if not isinstance(s, str):
             return []
         return [emotion.strip() for emotion in s.split(",")]
@@ -70,11 +70,16 @@ class GraphBuilder:
 
     def build_holistic_concept_graph(self):
         G = nx.Graph()
-        df_g = self.df.copy()  # type: ignore
+        df_g = self.df.copy()  # type: ignore[]
         pref_columns = [col for col in df_g.columns if col.startswith("pref_")]
         df_g[pref_columns] = df_g[pref_columns].fillna("not_specified")
         df_g["product_interest"].fillna("not_specified", inplace=True)
-        df_g["emotions_list"] = df_g["emotions"].apply(self._parse_emotion_string)
+        df_g["emotions_list"] = df_g["emotions"].apply(
+            self._parse_comma_separated_string
+        )
+        df_g["question_types_list"] = df_g["question_types"].apply(
+            self._parse_comma_separated_string
+        )
 
         for _, row in df_g.iterrows():
             concepts = []
@@ -84,6 +89,7 @@ class GraphBuilder:
                 if row[col] != "not_specified":
                     concepts.append(f"pref:{row[col]}")
             concepts.extend(row["emotions_list"])
+            concepts.extend(row["question_types_list"])
             for edge in combinations(set(concepts), 2):
                 if G.has_edge(*edge):
                     G[edge[0]][edge[1]]["weight"] += 1
@@ -95,12 +101,14 @@ class GraphBuilder:
 
     def build_emotion_word_graph(self):
         B = nx.Graph()
-        df_b = self.df[self.df["emotions"].notna()].copy()  # type: ignore
-        df_b["customer_text"] = df_b["conversation_text"].apply(  # type: ignore
+        df_b = self.df[self.df["emotions"].notna()].copy()  # type: ignore[]
+        df_b["customer_text"] = df_b["conversation_text"].apply(  # type: ignore[]
             self._extract_customer_text
         )
-        df_b["cleaned_tokens"] = df_b["customer_text"].apply(self._preprocess_text)  # type: ignore
-        df_b["emotions_list"] = df_b["emotions"].apply(self._parse_emotion_string)  # type: ignore
+        df_b["cleaned_tokens"] = df_b["customer_text"].apply(self._preprocess_text)  # type: ignore[]
+        df_b["emotions_list"] = df_b["emotions"].apply(  # type: ignore[]
+            self._parse_comma_separated_string
+        )
 
         words = set(token for tokens in df_b["cleaned_tokens"] for token in tokens)
         emotions = set(
@@ -119,7 +127,84 @@ class GraphBuilder:
         print(f"Emotion-Word Graph (B) created with {B.number_of_nodes()} nodes.")
         return B
 
-    def build_and_save_graphs(self, g_path, b_path):
+    def build_cross_sell_graph(self):
+        """
+        Builds a directed graph from product interest to cross-sell opportunities.
+        """
+        X = nx.DiGraph()
+        df_x = self.df[self.df["cross_sell_opportunity"].notna()].copy()  # type: ignore[]
+
+        df_x["product_interest_cleaned"] = df_x["product_interest"].str.strip()  # type: ignore[]
+
+        for _, row in df_x.iterrows():
+            product = row["product_interest_cleaned"]
+            cross_sell_opp = row["cross_sell_opportunity"]
+
+            if not X.has_node(product):
+                X.add_node(product, type="product")
+            if not X.has_node(cross_sell_opp):
+                X.add_node(cross_sell_opp, type="cross_sell")
+
+            if X.has_edge(product, cross_sell_opp):
+                X[product][cross_sell_opp]["weight"] += 1
+            else:
+                X.add_edge(product, cross_sell_opp, weight=1)
+
+        print(f"Cross-Sell Graph (X) created with {X.number_of_nodes()} nodes.")
+
+        # graph enrichment
+        X_undirected = X.to_undirected()
+
+        product_nodes = {n for n, d in X.nodes(data=True) if d.get("type") == "product"}
+
+        node_pairs_to_predict = combinations(product_nodes, 2)
+
+        ebunch = [
+            pair
+            for pair in node_pairs_to_predict
+            if not X.has_edge(pair[0], pair[1]) and not X.has_edge(pair[1], pair[0])
+        ]
+
+        predictions = nx.jaccard_coefficient(X_undirected, ebunch)
+
+        sorted_predictions = sorted(predictions, key=lambda x: x[2], reverse=True)
+
+        num_links_to_add = 5
+        new_edges_added = 0
+
+        for u, v, score in sorted_predictions:
+            if new_edges_added >= num_links_to_add or score == 0:
+                break
+
+            if X.has_node(u):
+                potential_targets = set()
+                for neighbor in nx.common_neighbors(X_undirected, u, v):
+                    if X.has_node(neighbor):
+                        potential_targets.update(X.successors(neighbor))
+
+                if potential_targets:
+                    target_opp = max(
+                        potential_targets,
+                        key=lambda t: sum(
+                            X[neighbor][t]["weight"]
+                            for neighbor in nx.common_neighbors(X_undirected, u, v)
+                            if X.has_edge(neighbor, t)
+                        ),
+                    )
+
+                    if not X.has_edge(v, target_opp):
+                        X.add_edge(v, target_opp, weight=score, type="predicted")
+                        new_edges_added += 1
+
+        print(
+            f"Graph Enrichment Complete: Added {new_edges_added} new predicted cross-sell edges."
+        )
+        return X
+
+    def build_and_save_graphs(self, g_path, b_path, x_path):
+        """
+        Orchestrates building and saving all three graphs.
+        """
         if not self.load_and_clean_data():
             return
 
@@ -132,3 +217,9 @@ class GraphBuilder:
         with open(b_path, "wb") as f:
             pickle.dump(B, f)
         print(f"Saved Emotion-Word Graph to {b_path}")
+
+        X = self.build_cross_sell_graph()
+        with open(x_path, "wb") as f:
+            pickle.dump(X, f)
+        print(f"Saved Cross-Sell Graph to {x_path}")
+

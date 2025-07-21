@@ -1,8 +1,9 @@
-from nltk.stem import WordNetLemmatizer
 import re
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
 from collections import defaultdict
+
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+from nltk.tokenize import word_tokenize
 
 
 class RecommenderSystem:
@@ -10,9 +11,10 @@ class RecommenderSystem:
     Loads pre-built graphs and provides recommendation and analysis functions.
     """
 
-    def __init__(self, concept_graph, emotion_graph):
+    def __init__(self, concept_graph, emotion_graph, cross_sell_graph):
         self.G = concept_graph
         self.B = emotion_graph
+        self.X = cross_sell_graph
         self.all_graph_nodes = list(self.G.nodes())
         self.lemmatizer = WordNetLemmatizer()
         self.stop_words = set(stopwords.words("english"))
@@ -65,3 +67,23 @@ class RecommenderSystem:
                 found_concepts.append(node)
                 text_lower = text_lower.replace(node_text, "")
         return found_concepts
+
+    def get_cross_sell_recommendation(self, current_products):
+        """
+        Finds the best cross-sell opportunity for the given products.
+        """
+        if not current_products:
+            return None
+
+        best_cross_sell = None
+        max_weight = 0
+
+        for product in current_products:
+            if self.X.has_node(product):
+                for _, cross_sell_opp, data in self.X.out_edges(product, data=True):
+                    weight = data.get("weight", 0)
+                    if weight > max_weight:
+                        max_weight = weight
+                        best_cross_sell = cross_sell_opp
+
+        return best_cross_sell
