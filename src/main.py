@@ -1,3 +1,4 @@
+import argparse
 import os
 import pickle
 import warnings
@@ -5,6 +6,7 @@ import warnings
 from dotenv import load_dotenv
 
 from src.agent import Agent
+from src.chat import start_chat_loop
 from src.constants import (
     ASSETS_DIR,
     CONCEPT_GRAPH_FILE,
@@ -25,21 +27,31 @@ load_dotenv()
 def main():
     """
     Main entry point for the application.
-    Initializes components and runs the chat loop.
+    Handles argument parsing, initializes components, and starts the chat loop.
     """
+    parser = argparse.ArgumentParser(description="Run the conversational AI agent.")
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["link", "gat"],
+        default="link",
+        help="Recommendation mode to use: 'link' for Jaccard link prediction (default) or 'gat' for GAT model.",
+    )
+    args = parser.parse_args()
+
     os.makedirs(ASSETS_DIR, exist_ok=True)
     os.makedirs(MODELS_DIR, exist_ok=True)
 
-    if not all(
-        os.path.exists(f)
-        for f in [
-            CONCEPT_GRAPH_FILE,
-            EMOTION_GRAPH_FILE,
-            CROSS_SELL_GRAPH_FILE,
-            NODE_MAPPING_FILE,
-        ]
-    ):
-        print("One or more graph files not found. Building graphs from source data...")
+    required_files = [
+        CONCEPT_GRAPH_FILE,
+        EMOTION_GRAPH_FILE,
+        CROSS_SELL_GRAPH_FILE,
+        NODE_MAPPING_FILE,
+    ]
+    if not all(os.path.exists(f) for f in required_files):
+        print(
+            "One or more graph/mapping files not found. Building graphs from source data..."
+        )
         builder = GraphBuilder(DATA_FILE)
         builder.build_and_save_graphs(
             CONCEPT_GRAPH_FILE,
@@ -57,93 +69,22 @@ def main():
             X = pickle.load(f)
         with open(NODE_MAPPING_FILE, "rb") as f:
             node_mapping = pickle.load(f)
-
-        print("All graphs loaded successfully.")
+        print("All graphs and node mapping loaded successfully.")
     except (FileNotFoundError, pickle.UnpicklingError) as e:
         print(
             f"Error loading graph files: {e}. Please delete them and rerun to rebuild."
         )
         return
 
-    recommender = RecommenderSystem(G, B, X, GAT_MODEL_FILE, node_mapping)
+    if args.mode == "gat":
+        recommender = RecommenderSystem(G, B, X, GAT_MODEL_FILE, node_mapping)
+    else:
+        recommender = RecommenderSystem(G, B, X)
+
     agent = Agent()
-    emotions = {n for n, d in B.nodes(data=True) if d.get("bipartite") == 1}
 
-    print("\n--- Starting Interactive Chat Session ---")
-    print("Type 'exit' to end the conversation.")
-
-    conversation_history = ""
-    conversation_context = []
-    turn_counter = 0
-
-    while True:
-        customer_input = input("\nCustomer: ")
-        if customer_input.lower() == "exit":
-            print("Agent: Thank you for chatting with us. Goodbye!")
-            break
-
-        recommendation_list = []
-        cross_sell_suggestion = None
-
-        detected_emotion = recommender.detect_emotion_from_text(customer_input)
-        found_concepts = recommender.extract_concepts_from_text(customer_input)
-
-        if (
-            detected_emotion != "neutral"
-            and detected_emotion not in conversation_context
-        ):
-            conversation_context.append(detected_emotion)
-        for concept in found_concepts:
-            if concept not in conversation_context:
-                conversation_context.append(concept)
-
-        recommendations = recommender.get_link_prediction_recommendations(
-            conversation_context
-        )
-        recommendation_list = [item[0] for item in recommendations]
-
-        # uncomment this to avoid cross selling when user has negative emotion
-        # negative_emotions = {
-        #     "anxious",
-        #     "worried",
-        #     "frustrated",
-        #     "confused",
-        #     "overwhelmed",
-        # }
-        # if turn_counter > 2 and detected_emotion not in negative_emotions:
-        if turn_counter > 2:
-            current_products = [
-                concept
-                for concept in conversation_context
-                if not concept.startswith("pref:") and concept not in emotions
-            ]
-            cross_sell_suggestion = recommender.get_cross_sell_recommendation(
-                current_products
-            )
-
-        print("\n--- SYSTEM ANALYSIS ---")
-        print(f"Detected Emotion: {detected_emotion}")
-        print(f"Found Concepts: {found_concepts}")
-        print(f"Updated Conversation Context: {conversation_context}")
-        print(f"Topic Recommendations: {recommendation_list}")
-        if cross_sell_suggestion:
-            print(f"Cross-Sell Suggestion: {cross_sell_suggestion}")
-        print("-----------------------\n")
-
-        # --- Generate and print agent reply ---
-        # Note: You will need to update the Agent class to handle the new cross_sell_suggestion parameter
-        agent_reply = agent.get_reply(
-            conversation_history,
-            recommendation_list,
-            customer_input,
-            cross_sell_suggestion,
-        )
-        print(f"Agent: {agent_reply}")
-
-        conversation_history += f"Customer: {customer_input}\nAgent: {agent_reply}\n"
-        turn_counter += 1
+    start_chat_loop(recommender, agent, mode=args.mode)
 
 
 if __name__ == "__main__":
     main()
-

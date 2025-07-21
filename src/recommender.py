@@ -59,7 +59,7 @@ class RecommenderSystem:
             try:
                 self.gat_model = GATLinkPredictor(len(node_mapping), 128, 64)
                 self.gat_model.load_state_dict(torch.load(gat_model_path))
-                self.gat_model.eval()  # Set model to evaluation mode
+                self.gat_model.eval()
                 print(f"Successfully loaded trained GAT model from '{gat_model_path}'.")
 
                 with torch.no_grad():
@@ -205,4 +205,3 @@ class RecommenderSystem:
                         best_cross_sell = cross_sell_opp
 
         return best_cross_sell
-

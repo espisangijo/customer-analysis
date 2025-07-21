@@ -26,6 +26,7 @@ dependencies = [
   "plotly>=5.17.0",
   "dash>=2.14.0",
   "dash-cytoscape>=0.3.0",
+  "rich>=14.0.0",
 ]
 
 [dependency-groups]
