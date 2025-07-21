@@ -2,6 +2,8 @@
 
 This project implements an intelligent conversational agent for a banking/insurance setting. The agent uses a combination of graph-based data analysis and a large language model (LLM) to provide context-aware, empathetic, and relevant responses to customer queries.
 
+![Chatbot Demo](docs/demo.gif)
+
 ## Key Features
 
 - **Graph-Based Knowledge:** The system builds knowledge graphs from conversation data to understand relationships between products, customer preferences, and emotions.
