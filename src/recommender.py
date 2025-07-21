@@ -7,6 +7,7 @@ from nltk.tokenize import word_tokenize
 import networkx as nx
 import torch
 import torch.nn.functional as F
+from transformers import pipeline
 
 from src.train_gat import GATLinkPredictor
 
@@ -29,6 +30,7 @@ class RecommenderSystem:
         self.X = cross_sell_graph
         self.all_graph_nodes = list(self.G.nodes())
         self.lemmatizer = WordNetLemmatizer()
+        self.approach = "link"
 
         self.stop_words = set(stopwords.words("english"))
 
@@ -71,12 +73,20 @@ class RecommenderSystem:
                     edge_index = torch.tensor(list(G_relabeled.edges)).t().contiguous()
                     self.node_embeddings = self.gat_model.encode(x, edge_index)
                 print("Generated node embeddings using GAT model.")
+
+                self.approach = "gat"
             except FileNotFoundError:
                 print(
                     f"Warning: GAT model file not found at '{gat_model_path}'. GAT recommendations will be unavailable."
                 )
             except Exception as e:
                 print(f"An error occurred while loading the GAT model: {e}")
+
+        self.emotion_pipeline = pipeline(
+            "text-classification", model="j-hartmann/emotion-english-distilroberta-base"
+        )
+
+        print("Sentiment model loaded.")
 
     def _preprocess_text(self, text):
         if not isinstance(text, str):
@@ -105,6 +115,9 @@ class RecommenderSystem:
         Advanced recommender using link prediction (Jaccard Coefficient)
         to find non-obvious connections.
         """
+        if self.approach == "gat":
+            return self.get_gat_recommendations(current_concepts, top_n)
+
         if not current_concepts:
             return []
 
@@ -160,6 +173,9 @@ class RecommenderSystem:
         ]
 
     def detect_emotion_from_text(self, text):
+        if self.approach == "gat":
+            return self.detect_emotion_from_text_transformer(text)
+
         tokens = self._preprocess_text(text)
         emotion_scores = defaultdict(int)
         for token in tokens:
@@ -175,6 +191,31 @@ class RecommenderSystem:
         return (
             max(emotion_scores, key=emotion_scores.get) if emotion_scores else "neutral"  # type: ignore
         )
+
+    def detect_emotion_from_text_transformer(self, text):
+        """
+        Limited set of emotion but better accuracy
+        """
+        if not text or not text.strip():
+            return "neutral"
+
+        try:
+            result = self.emotion_pipeline(text)[0]
+            label = result["label"]
+
+            emotion_map = {
+                "joy": "eager",
+                "sadness": "concerned",
+                "fear": "anxious",
+                "anger": "frustrated",
+                "surprise": "curious",
+                "disgust": "frustrated",
+                "neutral": "neutral",
+            }
+            return emotion_map.get(label, "neutral")
+        except Exception as e:
+            print(f"Error during sentiment analysis: {e}")
+            return "neutral"
 
     def extract_concepts_from_text(self, text):
         found_concepts = []

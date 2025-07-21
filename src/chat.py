@@ -52,16 +52,9 @@ def start_chat_loop(recommender, agent, mode="link_prediction"):
             if concept not in conversation_context:
                 conversation_context.append(concept)
 
-        if mode == "gat" and recommender.gat_model is not None:
-            recommendations = recommender.get_gat_recommendations(conversation_context)
-        else:
-            if mode == "gat":
-                console.print(
-                    "[yellow](GAT model not found, falling back to link prediction)[/yellow]"
-                )
-            recommendations = recommender.get_link_prediction_recommendations(
-                conversation_context
-            )
+        recommendations = recommender.get_link_prediction_recommendations(
+            conversation_context
+        )
 
         recommendation_list = [item[0] for item in recommendations]
 
