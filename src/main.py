@@ -5,19 +5,21 @@ import warnings
 from dotenv import load_dotenv
 
 from src.agent import Agent
+from src.constants import (
+    ASSETS_DIR,
+    CONCEPT_GRAPH_FILE,
+    CROSS_SELL_GRAPH_FILE,
+    DATA_FILE,
+    EMOTION_GRAPH_FILE,
+    MODELS_DIR,
+    NODE_MAPPING_FILE,
+    GAT_MODEL_FILE,
+)
 from src.graph import GraphBuilder
 from src.recommender import RecommenderSystem
 
 warnings.filterwarnings("ignore")
 load_dotenv()
-
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_FILE = os.path.join(
-    os.path.dirname(ROOT_DIR), "data", "processed", "conversations-1750493143.csv"
-)
-CONCEPT_GRAPH_FILE = "holistic_concept_graph.gpickle"
-EMOTION_GRAPH_FILE = "emotion_word_graph.gpickle"
-CROSS_SELL_GRAPH_FILE = "cross_sell_graph.gpickle"  # New graph file
 
 
 def main():
@@ -25,14 +27,25 @@ def main():
     Main entry point for the application.
     Initializes components and runs the chat loop.
     """
+    os.makedirs(ASSETS_DIR, exist_ok=True)
+    os.makedirs(MODELS_DIR, exist_ok=True)
+
     if not all(
         os.path.exists(f)
-        for f in [CONCEPT_GRAPH_FILE, EMOTION_GRAPH_FILE, CROSS_SELL_GRAPH_FILE]
+        for f in [
+            CONCEPT_GRAPH_FILE,
+            EMOTION_GRAPH_FILE,
+            CROSS_SELL_GRAPH_FILE,
+            NODE_MAPPING_FILE,
+        ]
     ):
         print("One or more graph files not found. Building graphs from source data...")
         builder = GraphBuilder(DATA_FILE)
         builder.build_and_save_graphs(
-            CONCEPT_GRAPH_FILE, EMOTION_GRAPH_FILE, CROSS_SELL_GRAPH_FILE
+            CONCEPT_GRAPH_FILE,
+            EMOTION_GRAPH_FILE,
+            CROSS_SELL_GRAPH_FILE,
+            NODE_MAPPING_FILE,
         )
 
     try:
@@ -42,6 +55,9 @@ def main():
             B = pickle.load(f)
         with open(CROSS_SELL_GRAPH_FILE, "rb") as f:
             X = pickle.load(f)
+        with open(NODE_MAPPING_FILE, "rb") as f:
+            node_mapping = pickle.load(f)
+
         print("All graphs loaded successfully.")
     except (FileNotFoundError, pickle.UnpicklingError) as e:
         print(
@@ -49,7 +65,7 @@ def main():
         )
         return
 
-    recommender = RecommenderSystem(G, B, X)
+    recommender = RecommenderSystem(G, B, X, GAT_MODEL_FILE, node_mapping)
     agent = Agent()
     emotions = {n for n, d in B.nodes(data=True) if d.get("bipartite") == 1}
 
@@ -69,44 +85,41 @@ def main():
         recommendation_list = []
         cross_sell_suggestion = None
 
-        if turn_counter > 0:
-            detected_emotion = recommender.detect_emotion_from_text(customer_input)
-            found_concepts = recommender.extract_concepts_from_text(customer_input)
+        detected_emotion = recommender.detect_emotion_from_text(customer_input)
+        found_concepts = recommender.extract_concepts_from_text(customer_input)
 
-            if (
-                detected_emotion != "neutral"
-                and detected_emotion not in conversation_context
-            ):
-                conversation_context.append(detected_emotion)
-            for concept in found_concepts:
-                if concept not in conversation_context:
-                    conversation_context.append(concept)
+        if (
+            detected_emotion != "neutral"
+            and detected_emotion not in conversation_context
+        ):
+            conversation_context.append(detected_emotion)
+        for concept in found_concepts:
+            if concept not in conversation_context:
+                conversation_context.append(concept)
 
-            recommendations = recommender.get_recommendations(conversation_context)
-            recommendation_list = [item[0] for item in recommendations]
+        recommendations = recommender.get_link_prediction_recommendations(
+            conversation_context
+        )
+        recommendation_list = [item[0] for item in recommendations]
 
-            # uncomment this to avoid cross selling when user has negative emotion
-            # negative_emotions = {
-            #     "anxious",
-            #     "worried",
-            #     "frustrated",
-            #     "confused",
-            #     "overwhelmed",
-            # }
-            # if turn_counter > 2 and detected_emotion not in negative_emotions:
-            if turn_counter > 2:
-                current_products = [
-                    concept
-                    for concept in conversation_context
-                    if not concept.startswith("pref:") and concept not in emotions
-                ]
-                cross_sell_suggestion = recommender.get_cross_sell_recommendation(
-                    current_products
-                )
-
-        else:
-            detected_emotion = "N/A"
-            found_concepts = []
+        # uncomment this to avoid cross selling when user has negative emotion
+        # negative_emotions = {
+        #     "anxious",
+        #     "worried",
+        #     "frustrated",
+        #     "confused",
+        #     "overwhelmed",
+        # }
+        # if turn_counter > 2 and detected_emotion not in negative_emotions:
+        if turn_counter > 2:
+            current_products = [
+                concept
+                for concept in conversation_context
+                if not concept.startswith("pref:") and concept not in emotions
+            ]
+            cross_sell_suggestion = recommender.get_cross_sell_recommendation(
+                current_products
+            )
 
         print("\n--- SYSTEM ANALYSIS ---")
         print(f"Detected Emotion: {detected_emotion}")
@@ -133,3 +146,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

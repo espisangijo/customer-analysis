@@ -4,6 +4,11 @@ from collections import defaultdict
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
+import networkx as nx
+import torch
+import torch.nn.functional as F
+
+from src.train_gat import GATLinkPredictor
 
 
 class RecommenderSystem:
@@ -11,13 +16,67 @@ class RecommenderSystem:
     Loads pre-built graphs and provides recommendation and analysis functions.
     """
 
-    def __init__(self, concept_graph, emotion_graph, cross_sell_graph):
+    def __init__(
+        self,
+        concept_graph,
+        emotion_graph,
+        cross_sell_graph,
+        gat_model_path=None,
+        node_mapping=None,
+    ):
         self.G = concept_graph
         self.B = emotion_graph
         self.X = cross_sell_graph
         self.all_graph_nodes = list(self.G.nodes())
         self.lemmatizer = WordNetLemmatizer()
+
         self.stop_words = set(stopwords.words("english"))
+
+        # link prediction approach
+        self._emotion_nodes = {
+            n for n, d in self.B.nodes(data=True) if d.get("bipartite") == 1
+        }
+        self._product_nodes = {
+            n
+            for n in self.G.nodes()
+            if not n.startswith("pref:")
+            and n not in self._emotion_nodes
+            and "question" not in n
+        }
+        self._preference_nodes = {n for n in self.G.nodes() if n.startswith("pref:")}
+        self._question_nodes = (
+            set(self.G.nodes())
+            - self._product_nodes
+            - self._emotion_nodes
+            - self._preference_nodes
+        )
+
+        # GAT approach
+        if node_mapping and gat_model_path:
+            self.node_mapping = node_mapping
+            self.gat_model = None
+            self.node_embeddings = None
+            try:
+                self.gat_model = GATLinkPredictor(len(node_mapping), 128, 64)
+                self.gat_model.load_state_dict(torch.load(gat_model_path))
+                self.gat_model.eval()  # Set model to evaluation mode
+                print(f"Successfully loaded trained GAT model from '{gat_model_path}'.")
+
+                with torch.no_grad():
+                    G_relabeled = nx.relabel_nodes(self.G, self.node_mapping)
+                    x = F.one_hot(
+                        torch.arange(len(self.node_mapping)),
+                        num_classes=len(self.node_mapping),
+                    ).float()
+                    edge_index = torch.tensor(list(G_relabeled.edges)).t().contiguous()
+                    self.node_embeddings = self.gat_model.encode(x, edge_index)
+                print("Generated node embeddings using GAT model.")
+            except FileNotFoundError:
+                print(
+                    f"Warning: GAT model file not found at '{gat_model_path}'. GAT recommendations will be unavailable."
+                )
+            except Exception as e:
+                print(f"An error occurred while loading the GAT model: {e}")
 
     def _preprocess_text(self, text):
         if not isinstance(text, str):
@@ -40,6 +99,65 @@ class RecommenderSystem:
             if concept in scores:
                 del scores[concept]
         return sorted(scores.items(), key=lambda item: item[1], reverse=True)[:top_n]
+
+    def get_link_prediction_recommendations(self, current_concepts, top_n=3):
+        """
+        Advanced recommender using link prediction (Jaccard Coefficient)
+        to find non-obvious connections.
+        """
+        if not current_concepts:
+            return []
+
+        affinity_scores = defaultdict(float)
+
+        candidate_products = self._product_nodes - set(current_concepts)
+
+        for candidate in candidate_products:
+            total_score = 0
+            for concept in current_concepts:
+                for _, _, score in nx.jaccard_coefficient(
+                    self.G, [(candidate, concept)]
+                ):
+                    total_score += score
+            affinity_scores[candidate] = total_score
+
+        return sorted(affinity_scores.items(), key=lambda item: item[1], reverse=True)[
+            :top_n
+        ]
+
+    def get_gat_recommendations(self, current_concepts, top_n=3):
+        """
+        Most advanced recommender using the trained GAT model's node embeddings.
+        """
+        if self.node_embeddings is None or not current_concepts:
+            return []
+
+        if not self.node_mapping or not self.gat_model:
+            return self.get_link_prediction_recommendations(current_concepts, top_n)
+
+        affinity_scores = defaultdict(float)
+
+        context_indices = [
+            self.node_mapping[c] for c in current_concepts if c in self.node_mapping
+        ]
+        if not context_indices:
+            return []
+
+        context_embeddings = self.node_embeddings[context_indices]
+
+        candidate_products_str = self._product_nodes - set(current_concepts)
+
+        for candidate_str in candidate_products_str:
+            if candidate_str in self.node_mapping:
+                candidate_idx = self.node_mapping[candidate_str]
+                candidate_embedding = self.node_embeddings[candidate_idx]
+
+                score = (context_embeddings @ candidate_embedding).mean().item()
+                affinity_scores[candidate_str] = score
+
+        return sorted(affinity_scores.items(), key=lambda item: item[1], reverse=True)[
+            :top_n
+        ]
 
     def detect_emotion_from_text(self, text):
         tokens = self._preprocess_text(text)
@@ -87,3 +205,4 @@ class RecommenderSystem:
                         best_cross_sell = cross_sell_opp
 
         return best_cross_sell
+

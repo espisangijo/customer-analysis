@@ -201,17 +201,23 @@ class GraphBuilder:
         )
         return X
 
-    def build_and_save_graphs(self, g_path, b_path, x_path):
+    def build_and_save_graphs(self, g_path, b_path, x_path, mapping_path):
         """
         Orchestrates building and saving all three graphs.
         """
         if not self.load_and_clean_data():
             return
 
+        print(f"Saved Node Mapping to {mapping_path}")
         G = self.build_holistic_concept_graph()
         with open(g_path, "wb") as f:
             pickle.dump(G, f)
         print(f"Saved Concept Graph to {g_path}")
+
+        node_mapping = {node: i for i, node in enumerate(G.nodes())}
+        with open(mapping_path, "wb") as f:
+            pickle.dump(node_mapping, f)
+        print(f"Saved Node Mapping to {mapping_path}")
 
         B = self.build_emotion_word_graph()
         with open(b_path, "wb") as f:
@@ -222,4 +228,3 @@ class GraphBuilder:
         with open(x_path, "wb") as f:
             pickle.dump(X, f)
         print(f"Saved Cross-Sell Graph to {x_path}")
-
