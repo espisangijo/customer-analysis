@@ -227,22 +227,47 @@ class RecommenderSystem:
                 text_lower = text_lower.replace(node_text, "")
         return found_concepts
 
-    def get_cross_sell_recommendation(self, current_products):
+    def get_cross_sell_recommendation(self, current_concepts):
         """
-        Finds the best cross-sell opportunity for the given products.
+        Proactively finds the best cross-sell opportunity based on the entire conversation context.
         """
-        if not current_products:
+        if not current_concepts:
             return None
 
+        # 1. Identify all products that are known to lead to a cross-sell
+        source_products = {
+            n for n, d in self.X.nodes(data=True) if d.get("type") == "product"
+        }
+        if not source_products:
+            return None
+
+        # 2. Score each source product based on its relevance to the current context
+        affinity_scores = defaultdict(float)
+        for product in source_products:
+            score = 0
+            for concept in current_concepts:
+                # Check for a connection in the holistic graph
+                if self.G.has_edge(product, concept):
+                    # Add the strength of the connection to the score
+                    score += self.G[product][concept].get("weight", 1.0)
+            affinity_scores[product] = score
+
+        # 3. Find the product that is most relevant to the context
+        if not any(affinity_scores.values()):
+            return None
+
+        best_primary_product = max(affinity_scores, key=affinity_scores.get)
+
+        # 4. Find the strongest cross-sell opportunity for that best product
         best_cross_sell = None
         max_weight = 0
-
-        for product in current_products:
-            if self.X.has_node(product):
-                for _, cross_sell_opp, data in self.X.out_edges(product, data=True):
-                    weight = data.get("weight", 0)
-                    if weight > max_weight:
-                        max_weight = weight
-                        best_cross_sell = cross_sell_opp
+        if self.X.has_node(best_primary_product):
+            for _, cross_sell_opp, data in self.X.out_edges(
+                best_primary_product, data=True
+            ):
+                weight = data.get("weight", 0)
+                if weight > max_weight:
+                    max_weight = weight
+                    best_cross_sell = cross_sell_opp
 
         return best_cross_sell

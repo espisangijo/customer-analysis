@@ -65,12 +65,9 @@ def start_chat_loop(recommender, agent, mode="link_prediction"):
             "confused",
             "overwhelmed",
         }
-        if turn_counter > 2 and detected_emotion not in negative_emotions:
-            current_products = [
-                c for c in conversation_context if c in recommender._product_nodes
-            ]
+        if turn_counter > 1 and detected_emotion not in negative_emotions:
             cross_sell_suggestion = recommender.get_cross_sell_recommendation(
-                current_products
+                conversation_context
             )
 
         analysis_text = (
